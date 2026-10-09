@@ -1,0 +1,77 @@
+{
+  "protocol": 1,
+  "kinds": [
+    {
+      "name": "auth.role_acl",
+      "description": "Feature ACL of a role. Put replaces the ACL exactly; delete clears it (the role stays).",
+      "mode": "resource",
+      "keyField": "role",
+      "inputs": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "role": { "type": "string", "minLength": 1, "description": "Role name in the key's tenant." },
+          "features": { "type": "array", "items": { "type": "string" } },
+          "isSuperAdmin": { "default": false, "type": "boolean" },
+          "organizations": { "anyOf": [{ "type": "array", "items": { "type": "string", "format": "uuid" } }, { "type": "null" }], "description": "null = all organizations." }
+        },
+        "required": ["role", "features", "organizations"],
+        "additionalProperties": false
+      },
+      "outputs": { "type": "object", "properties": {} },
+      "secretFields": [],
+      "replaceOnChanges": []
+    },
+    {
+      "name": "api_keys.api_key",
+      "description": "An API key. The secret is only returned by the put that created it.",
+      "mode": "resource",
+      "keyField": "name",
+      "inputs": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+          "roles": { "type": "array", "items": { "type": "string" } },
+          "organizationId": { "anyOf": [{ "type": "string", "format": "uuid" }, { "type": "null" }] },
+          "expiresAt": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }] }
+        },
+        "required": ["name", "roles"],
+        "additionalProperties": false
+      },
+      "outputs": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "keyPrefix": { "type": "string" },
+          "secret": { "type": "string" }
+        },
+        "required": ["id", "keyPrefix", "secret"],
+        "additionalProperties": false
+      },
+      "secretFields": ["secret"],
+      "replaceOnChanges": ["roles", "organizationId", "expiresAt"]
+    },
+    {
+      "name": "directory.scope",
+      "description": "The caller API key's own tenant and organization.",
+      "mode": "data",
+      "inputs": { "type": "object", "properties": {} },
+      "outputs": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "tenantId": { "type": "string", "format": "uuid" },
+          "tenantName": { "type": "string" },
+          "organizationId": { "type": "string", "format": "uuid" },
+          "organizationName": { "type": "string" }
+        },
+        "required": ["tenantId", "tenantName", "organizationId", "organizationName"],
+        "additionalProperties": false
+      },
+      "secretFields": []
+    }
+  ]
+}
