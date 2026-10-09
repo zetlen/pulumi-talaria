@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -304,6 +305,12 @@ func (k *Kind) preview(inputs, prev property.Map) property.Map {
 	return k.markSecrets(st)
 }
 
+// hasSecretOutput reports whether the server generates a secret the program cannot supply.
+func (k *Kind) hasSecretOutput() bool {
+	out := properties(k.Outputs)
+	return slices.ContainsFunc(k.SecretFields, func(f string) bool { return out[f] != nil })
+}
+
 func (s *state) create(ctx context.Context, req p.CreateRequest) (p.CreateResponse, error) {
 	k, err := s.kind(req.Urn.Type().String(), modeResource)
 	if err != nil {
@@ -312,6 +319,18 @@ func (s *state) create(ctx context.Context, req p.CreateRequest) (p.CreateRespon
 	inputs := renameKeys(req.Properties, k.protocolName)
 	if req.DryRun {
 		return p.CreateResponse{Properties: renameKeys(k.preview(inputs, property.Map{}), k.exposed)}, nil
+	}
+	// The server never repeats an existing object's secret output. A create under an existing key
+	// (forced replace, or a stray object) could therefore only return state with the secret lost, so
+	// refuse before writing anything: the engine then keeps the old state and skips the old delete.
+	if key, ok := inputs.GetOk(k.KeyField); ok && key.IsString() && k.hasSecretOutput() {
+		existing, err := s.client.get(ctx, k.Name, key.AsString())
+		if err != nil {
+			return p.CreateResponse{}, err
+		}
+		if existing != nil {
+			return p.CreateResponse{}, fmt.Errorf("%s %q already exists, so its secret can't be read back. To rotate it, run pulumi destroy --target %s, then pulumi up. To adopt it, use pulumi import", k.Name, key.AsString(), req.Urn)
+		}
 	}
 	st, err := s.putState(ctx, k, inputs, property.Map{})
 	if err != nil {

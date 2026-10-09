@@ -355,6 +355,13 @@ func TestApiKeyLifecycle(t *testing.T) {
 	assert.ErrorContains(t, err, "immutable")
 	assert.ErrorContains(t, err, "issues:")
 
+	// a create under an existing key of a kind with a secret output is refused before any write:
+	// the secret could not be read back
+	_, err = e.prov.Create(ctx, p.CreateRequest{Urn: urn(keyTok), Properties: e.check(keyTok, inputs)})
+	require.ErrorContains(t, err, `already exists, so its secret can't be read back`)
+	assert.ErrorContains(t, err, "pulumi destroy --target")
+	assert.Contains(t, e.server("GET", "/api/iac/resources/api_keys.api_key?key=ci", ""), `"second"`, "a refused create must not write")
+
 	// a Delete of a key this process just PUT is the old half of a create-before-delete replace
 	// (`pulumi up --replace`, or a rename without an alias: other URN, same key): deleting by key
 	// would remove the object this run wrote
@@ -415,6 +422,8 @@ func TestRoleAclLifecycleAndDrift(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, r.HasChanges)
 
+	// a kind without secret outputs re-applies on a create under an existing key (forced replace)
+	e.create(aclTok, inputs)
 	// the ACL was created in this process too: that delete is the old half of a forced replace
 	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "employee", Urn: urn(aclTok)}))
 	assert.NotContains(t, e.server("GET", "/api/iac/resources/auth.role_acl?key=employee", ""), `"features":[]`)
