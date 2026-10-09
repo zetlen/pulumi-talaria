@@ -289,7 +289,9 @@ func TestApiKeyLifecycle(t *testing.T) {
 	upd := e.check(keyTok, pm(map[string]any{"name": "ci", "roles": []string{"admin"}, "description": "second"}))
 	d := diff(checked, upd)
 	assert.True(t, d.HasChanges)
-	assert.False(t, d.DeleteBeforeReplace)
+	assert.True(t, d.DeleteBeforeReplace, "key unchanged: delete first, whatever changed")
+	assert.False(t, diff(checked, checked).HasChanges)
+	assert.True(t, diff(checked, checked).DeleteBeforeReplace, "key unchanged and nothing changed: still delete first for forced replaces")
 	assert.Equal(t, map[string]p.PropertyDiff{"description": {Kind: p.Update, InputDiff: true}}, d.DetailedDiff)
 	nodesc := e.check(keyTok, pm(map[string]any{"name": "ci", "roles": []string{"admin"}}))
 	assert.Equal(t, p.Delete, diff(checked, nodesc).DetailedDiff["description"].Kind)
@@ -312,7 +314,7 @@ func TestApiKeyLifecycle(t *testing.T) {
 	// diff: key field -> replace; adding a replace-field is add&replace
 	renamed := e.check(keyTok, pm(map[string]any{"name": "ci2", "roles": []string{"admin"}, "description": "first", "expiresAt": "2030-01-01T00:00:00Z"}))
 	d = diff(checked, renamed)
-	assert.True(t, d.DeleteBeforeReplace)
+	assert.False(t, d.DeleteBeforeReplace, "new key coexists with the old object, whatever else changed")
 	assert.Equal(t, p.UpdateReplace, d.DetailedDiff["name"].Kind)
 	assert.Equal(t, p.AddReplace, d.DetailedDiff["expiresAt"].Kind)
 	// key field alone: old and new can coexist, so create before delete
@@ -353,6 +355,10 @@ func TestApiKeyLifecycle(t *testing.T) {
 	assert.ErrorContains(t, err, "immutable")
 	assert.ErrorContains(t, err, "issues:")
 
+	// a Delete for a resource created in this very process is the old half of a create-before-delete
+	// forced replace (`pulumi up --replace`): the key is shared, so deleting would remove the new object
+	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "ci", Urn: urn(keyTok), Properties: created.Properties}))
+	assert.Contains(t, e.server("GET", "/api/iac/resources/api_keys.api_key?key=ci", ""), `"second"`, "forced-replace delete must not remove the new object")
 	// delete, then read reports it gone
 	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "ci", Urn: urn(keyTok), Properties: up.Properties}))
 	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "ci", Urn: urn(keyTok)}), "deleting an absent resource succeeds")
@@ -382,7 +388,7 @@ func TestRoleAclLifecycleAndDrift(t *testing.T) {
 		"features":     {Kind: p.Update, InputDiff: true},
 		"isSuperAdmin": {Kind: p.Update, InputDiff: true},
 	}, r.DetailedDiff)
-	assert.False(t, r.DeleteBeforeReplace, "ACL drift is repaired in place")
+	assert.True(t, r.DeleteBeforeReplace, "key unchanged: any replacement must delete first")
 
 	// the update repairs it
 	_, err = e.prov.Update(ctx, p.UpdateRequest{ID: "employee", Urn: urn(aclTok), State: rd.Properties, OldInputs: rd.Inputs, Inputs: checked})
@@ -403,6 +409,9 @@ func TestRoleAclLifecycleAndDrift(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, r.HasChanges)
 
+	// the ACL was created in this process too: that delete is the old half of a forced replace
+	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "employee", Urn: urn(aclTok)}))
+	assert.NotContains(t, e.server("GET", "/api/iac/resources/auth.role_acl?key=employee", ""), `"features":[]`)
 	// delete clears the ACL, the role stays
 	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "employee", Urn: urn(aclTok)}))
 	assert.Contains(t, e.server("GET", "/api/iac/resources/auth.role_acl?key=employee", ""), `"features":[]`)

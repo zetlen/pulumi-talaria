@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blang/semver"
@@ -40,6 +41,7 @@ type state struct {
 	doc     *KindsDoc
 	byToken map[string]*Kind
 	client  *client
+	created sync.Map // urn + "\x00" + id of resources created in this process
 }
 
 // parameterize captures the kinds document, from a path/URL (CLI) or the embedded
@@ -196,6 +198,7 @@ func (s *state) diff(_ context.Context, req p.DiffRequest) (p.DiffResponse, erro
 		old = pick(renameKeys(req.State, k.protocolName), properties(k.Inputs))
 	}
 	resp := p.DiffResponse{DetailedDiff: map[string]p.PropertyDiff{}}
+	keyChanged := false
 	schemas := properties(k.Inputs)
 	names := map[string]bool{}
 	for n := range old.All {
@@ -222,14 +225,15 @@ func (s *state) diff(_ context.Context, req p.DiffRequest) (p.DiffResponse, erro
 		}
 		if k.isReplace(name) {
 			kind += "&replace"
-			// Only a replaceOnChanges field keeps the key: the new resource would collide with the old
-			// one, so it must go first. A changed key field lets both coexist (create-before-delete).
-			if name != k.KeyField {
-				resp.DeleteBeforeReplace = true
-			}
+		}
+		if name == k.KeyField {
+			keyChanged = true
 		}
 		resp.DetailedDiff[k.exposed(name)] = p.PropertyDiff{Kind: kind, InputDiff: true}
 	}
+	// The kind's object is identified by its key. While the key is unchanged, a replacement would
+	// collide with the old object, so it must go first. A changed key lets both coexist.
+	resp.DeleteBeforeReplace = !keyChanged
 	resp.HasChanges = len(resp.DetailedDiff) > 0
 	return resp, nil
 }
@@ -308,11 +312,21 @@ func (s *state) create(ctx context.Context, req p.CreateRequest) (p.CreateRespon
 	if req.DryRun {
 		return p.CreateResponse{Properties: renameKeys(k.preview(inputs, property.Map{}), k.exposed)}, nil
 	}
+	// A create under an existing key is the new half of a create-before-delete forced replace
+	// (`pulumi up --replace`): clear the old object so the server mints a fresh one (new id, secret)
+	// rather than updating it in place. Deleting an absent object succeeds.
+	if key, ok := inputs.GetOk(k.KeyField); ok && key.IsString() {
+		if err := s.client.delete(ctx, k.Name, key.AsString()); err != nil {
+			return p.CreateResponse{}, err
+		}
+	}
 	st, err := s.putState(ctx, k, inputs, property.Map{})
 	if err != nil {
 		return p.CreateResponse{}, err
 	}
-	return p.CreateResponse{ID: st.Get(k.KeyField).AsString(), Properties: renameKeys(st, k.exposed)}, nil
+	id := st.Get(k.KeyField).AsString()
+	s.created.Store(string(req.Urn)+"\x00"+id, struct{}{})
+	return p.CreateResponse{ID: id, Properties: renameKeys(st, k.exposed)}, nil
 }
 
 func (s *state) update(ctx context.Context, req p.UpdateRequest) (p.UpdateResponse, error) {
@@ -332,6 +346,12 @@ func (s *state) delete(ctx context.Context, req p.DeleteRequest) error {
 	k, err := s.kind(req.Urn.Type().String(), modeResource)
 	if err != nil {
 		return err
+	}
+	// The engine ignores Diff's DeleteBeforeReplace for a forced replace (`--replace`): it creates
+	// the new object first, under the same key, then deletes the old resource. Deleting by key now
+	// would remove the new object, so skip the delete for a resource created in this very run.
+	if _, ok := s.created.LoadAndDelete(string(req.Urn) + "\x00" + req.ID); ok {
+		return nil
 	}
 	return s.client.delete(ctx, k.Name, req.ID)
 }
