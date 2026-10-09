@@ -1,0 +1,30 @@
+version: 2
+project_name: pulumi-resource-talaria
+
+builds:
+  - id: provider
+    main: ./cmd/pulumi-resource-talaria
+    binary: pulumi-resource-talaria
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: linux
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+# Pulumi plugin tarballs: pulumi-resource-talaria-v<version>-<os>-<arch>.tar.gz holding only the binary.
+archives:
+  - id: plugin
+    formats: [tar.gz]
+    name_template: "{{ .Binary }}-v{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - none*
+
+checksum:
+  name_template: "{{ .ProjectName }}-{{ .Version }}-checksums.txt"
+
+changelog:
+  disable: true
