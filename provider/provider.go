@@ -41,7 +41,7 @@ type state struct {
 	doc     *KindsDoc
 	byToken map[string]*Kind
 	client  *client
-	created sync.Map // urn + "\x00" + id of resources created in this process
+	written sync.Map // kind name + "\x00" + key of objects this process PUT and has not deleted since
 }
 
 // parameterize captures the kinds document, from a path/URL (CLI) or the embedded
@@ -263,6 +263,7 @@ func (s *state) putState(ctx context.Context, k *Kind, inputs, prev property.Map
 	if err != nil {
 		return property.Map{}, err
 	}
+	s.written.Store(k.Name+"\x00"+keyV.AsString(), struct{}{})
 	st := pick(inputs, properties(k.Inputs))
 	for n, v := range pick(prev, properties(k.Outputs)).All {
 		st = st.Set(n, v)
@@ -312,20 +313,11 @@ func (s *state) create(ctx context.Context, req p.CreateRequest) (p.CreateRespon
 	if req.DryRun {
 		return p.CreateResponse{Properties: renameKeys(k.preview(inputs, property.Map{}), k.exposed)}, nil
 	}
-	// A create under an existing key is the new half of a create-before-delete forced replace
-	// (`pulumi up --replace`): clear the old object so the server mints a fresh one (new id, secret)
-	// rather than updating it in place. Deleting an absent object succeeds.
-	if key, ok := inputs.GetOk(k.KeyField); ok && key.IsString() {
-		if err := s.client.delete(ctx, k.Name, key.AsString()); err != nil {
-			return p.CreateResponse{}, err
-		}
-	}
 	st, err := s.putState(ctx, k, inputs, property.Map{})
 	if err != nil {
 		return p.CreateResponse{}, err
 	}
 	id := st.Get(k.KeyField).AsString()
-	s.created.Store(string(req.Urn)+"\x00"+id, struct{}{})
 	return p.CreateResponse{ID: id, Properties: renameKeys(st, k.exposed)}, nil
 }
 
@@ -347,10 +339,11 @@ func (s *state) delete(ctx context.Context, req p.DeleteRequest) error {
 	if err != nil {
 		return err
 	}
-	// The engine ignores Diff's DeleteBeforeReplace for a forced replace (`--replace`): it creates
-	// the new object first, under the same key, then deletes the old resource. Deleting by key now
-	// would remove the new object, so skip the delete for a resource created in this very run.
-	if _, ok := s.created.LoadAndDelete(string(req.Urn) + "\x00" + req.ID); ok {
+	// The engine ignores Diff's DeleteBeforeReplace for a forced replace (`--replace`) and for a
+	// rename without an alias: it creates the new resource first, under the same key, then deletes
+	// the old one. Deleting by key now would remove the object this run just wrote, so a delete of a
+	// key this process PUT (and has not deleted since) is a no-op.
+	if _, ok := s.written.LoadAndDelete(k.Name + "\x00" + req.ID); ok {
 		return nil
 	}
 	return s.client.delete(ctx, k.Name, req.ID)

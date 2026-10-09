@@ -143,18 +143,6 @@ if [[ -n "$REAL" ]]; then # the key minted through Pulumi must authenticate agai
   ok "key minted through Pulumi authenticates against /api/iac/kinds"
 fi
 
-step "forced replace: pulumi up --replace <ApiKey> must not delete the new key"
-# The engine ignores Diff's deleteBeforeReplace for --replace and creates first, under the same key.
-KEY_URN=$(pulumi stack export | jq -r '.deployment.resources[] | select(.type == "talaria:api_keys:ApiKey") | .urn')
-[[ "$KEY_URN" == urn:pulumi:* ]] || die "could not find the api key urn (got '$KEY_URN')"
-pl up --yes --skip-preview --replace "$KEY_URN"
-expect "key replaced" "1 replaced"
-KEY_ID_3=$(pulumi stack output keyId)
-[[ "$KEY_ID_3" != "$KEY_ID_2" ]] || die "forced replace should have produced a new key id"
-[[ $(pulumi stack output --show-secrets secret) != "" ]] || die "forced replace lost the secret"
-[[ $(fake_state api_keys.api_key ci | jq -r .id) == "$KEY_ID_3" ]] || die "api key missing on the server after forced replace (create-before-delete removed it)"
-ok "forced replace kept the key on the server ($KEY_ID_2 -> $KEY_ID_3)"
-
 step "drift: mutate the server, then pulumi refresh"
 drift_acl
 pl refresh --yes --diff
@@ -165,6 +153,19 @@ ok "refresh kept the secret the server no longer returns"
 pl up --yes --skip-preview
 [[ $(fake_state auth.role_acl employee | jq -c .features) == "[\"$F1\",\"$F2\"]" ]] || die "up did not repair drift"
 ok "up repaired the drift"
+
+step "forced replace: pulumi up --replace <ApiKey> must leave the key on the server"
+# The engine ignores Diff's deleteBeforeReplace for --replace: it creates first, under the same key,
+# then deletes the old resource. The provider skips that delete. No new id/secret is minted; to
+# rotate a key, destroy --target it and up again. The old secret cannot be read back from the server,
+# so the state loses it (it is why this step runs after the drift step that checks the secret).
+KEY_URN=$(pulumi stack export | jq -r '.deployment.resources[] | select(.type == "talaria:api_keys:ApiKey") | .urn')
+[[ "$KEY_URN" == urn:pulumi:* ]] || die "could not find the api key urn (got '$KEY_URN')"
+pl up --yes --skip-preview --replace "$KEY_URN"
+expect "key replaced" "1 replaced"
+[[ $(fake_state api_keys.api_key ci | jq -r .id) == "$KEY_ID_2" ]] || die "api key missing on the server after forced replace (create-before-delete removed it)"
+pl preview --expect-no-changes
+ok "forced replace kept the key on the server and the next preview is clean"
 
 step "import: drop the ACL from state, import it back from the server"
 URN=$(pulumi stack export | jq -r '.deployment.resources[] | select(.type == "talaria:auth:RoleAcl") | .urn')

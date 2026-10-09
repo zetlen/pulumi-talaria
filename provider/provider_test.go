@@ -355,12 +355,18 @@ func TestApiKeyLifecycle(t *testing.T) {
 	assert.ErrorContains(t, err, "immutable")
 	assert.ErrorContains(t, err, "issues:")
 
-	// a Delete for a resource created in this very process is the old half of a create-before-delete
-	// forced replace (`pulumi up --replace`): the key is shared, so deleting would remove the new object
-	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "ci", Urn: urn(keyTok), Properties: created.Properties}))
-	assert.Contains(t, e.server("GET", "/api/iac/resources/api_keys.api_key?key=ci", ""), `"second"`, "forced-replace delete must not remove the new object")
-	// delete, then read reports it gone
+	// a Delete of a key this process just PUT is the old half of a create-before-delete replace
+	// (`pulumi up --replace`, or a rename without an alias: other URN, same key): deleting by key
+	// would remove the object this run wrote
+	oldUrn := presource.NewURN("stack", "proj", "", tokens.Type(keyTok), "old-name")
+	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "ci", Urn: oldUrn, Properties: created.Properties}))
+	assert.Contains(t, e.server("GET", "/api/iac/resources/api_keys.api_key?key=ci", ""), `"second"`, "delete of a just-written key must not remove the object")
 	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "ci", Urn: urn(keyTok), Properties: up.Properties}))
+	// a key this process never PUT is really deleted
+	assert.NotContains(t, e.server("GET", "/api/iac/resources/api_keys.api_key?key=ci", ""), `"second"`)
+	e.server("PUT", "/api/iac/resources/api_keys.api_key?key=other", `{"name":"other","roles":["admin"]}`)
+	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "other", Urn: urn(keyTok)}))
+	assert.Equal(t, `{"items":{"other":null}}`+"\n", e.server("GET", "/api/iac/resources/api_keys.api_key?key=other", ""))
 	require.NoError(t, e.prov.Delete(ctx, p.DeleteRequest{ID: "ci", Urn: urn(keyTok)}), "deleting an absent resource succeeds")
 	gone, err := e.prov.Read(ctx, p.ReadRequest{ID: "ci", Urn: urn(keyTok), Properties: up.Properties})
 	require.NoError(t, err)
