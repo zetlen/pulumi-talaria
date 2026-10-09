@@ -85,7 +85,9 @@ func mapToJSON(m property.Map, keep map[string]map[string]any) (map[string]any, 
 	return out, nil
 }
 
-// applyDefaults fills in schema defaults for absent properties, descending into nested objects.
+// applyDefaults fills in schema defaults for absent properties, descending into nested objects
+// and the items of arrays. The server applies every default of a nested object too (zod does), so
+// leaving one out here would make refresh report it as drift of a field the program never set.
 func applyDefaults(sch map[string]any, m property.Map) property.Map {
 	for name, node := range properties(sch) {
 		v, present := m.GetOk(name)
@@ -95,14 +97,31 @@ func applyDefaults(sch map[string]any, m property.Map) property.Map {
 			}
 			continue
 		}
-		if inner, ok := nullable(node); ok {
-			node = inner
-		}
-		if v.IsMap() {
-			m = m.Set(name, property.WithGoValue(v, applyDefaults(node, v.AsMap())))
-		}
+		m = m.Set(name, defaultsIn(node, v))
 	}
 	return m
+}
+
+// defaultsIn applies the defaults inside one present value: an object's properties, an array's items.
+func defaultsIn(node map[string]any, v property.Value) property.Value {
+	if inner, ok := nullable(node); ok {
+		node = inner
+	}
+	switch {
+	case v.IsMap():
+		return property.WithGoValue(v, applyDefaults(node, v.AsMap()))
+	case v.IsArray():
+		items, _ := node["items"].(map[string]any)
+		if items == nil {
+			return v
+		}
+		out := make([]property.Value, 0, v.AsArray().Len())
+		for _, e := range v.AsArray().All {
+			out = append(out, defaultsIn(items, e))
+		}
+		return property.WithGoValue(v, property.NewArray(out))
+	}
+	return v
 }
 
 // renameKeys returns m with every top-level key passed through f.
