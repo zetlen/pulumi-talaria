@@ -315,6 +315,17 @@ func TestApiKeyLifecycle(t *testing.T) {
 	assert.True(t, d.DeleteBeforeReplace)
 	assert.Equal(t, p.UpdateReplace, d.DetailedDiff["name"].Kind)
 	assert.Equal(t, p.AddReplace, d.DetailedDiff["expiresAt"].Kind)
+	// key field alone: old and new can coexist, so create before delete
+	onlyRenamed := e.check(keyTok, pm(map[string]any{"name": "ci2", "roles": []string{"admin"}, "description": "first"}))
+	d = diff(checked, onlyRenamed)
+	assert.Equal(t, p.UpdateReplace, d.DetailedDiff["name"].Kind)
+	assert.False(t, d.DeleteBeforeReplace)
+	// date-time strings compare as instants
+	plusTwo := e.check(keyTok, pm(map[string]any{"name": "ci", "roles": []string{"admin"}, "description": "first", "expiresAt": "2027-01-01T00:00:00+02:00"}))
+	zulu := e.check(keyTok, pm(map[string]any{"name": "ci", "roles": []string{"admin"}, "description": "first", "expiresAt": "2026-12-31T22:00:00.000Z"}))
+	assert.False(t, diff(plusTwo, zulu).HasChanges)
+	later := e.check(keyTok, pm(map[string]any{"name": "ci", "roles": []string{"admin"}, "description": "first", "expiresAt": "2026-12-31T22:00:01Z"}))
+	assert.True(t, diff(plusTwo, later).HasChanges)
 	// engines that send no old inputs: fall back to the input part of the state
 	r, err := e.prov.Diff(ctx, p.DiffRequest{ID: "ci", Urn: urn(keyTok), State: created.Properties, Inputs: roles})
 	require.NoError(t, err)
@@ -383,7 +394,7 @@ func TestRoleAclLifecycleAndDrift(t *testing.T) {
 	r, err = e.prov.Diff(ctx, p.DiffRequest{ID: "employee", Urn: urn(aclTok), OldInputs: checked, Inputs: other})
 	require.NoError(t, err)
 	assert.Equal(t, p.UpdateReplace, r.DetailedDiff["role"].Kind)
-	assert.True(t, r.DeleteBeforeReplace)
+	assert.False(t, r.DeleteBeforeReplace, "a new key field value can coexist with the old one")
 
 	// import of an existing role: inputs come back without nulls, so an unchanged program has no diff
 	imp, err := e.prov.Read(ctx, p.ReadRequest{ID: "employee", Urn: urn(aclTok)})

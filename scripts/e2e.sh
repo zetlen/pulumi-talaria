@@ -5,7 +5,8 @@
 # Real mode: set TALARIA_URL and TALARIA_API_KEY (a super-admin-capable key, see the Talaria iac
 # README) to run against a real Talaria instead; optional TALARIA_ADMIN_EMAIL/TALARIA_ADMIN_PASSWORD
 # make the drift step go through Talaria's own UI API (PUT /api/auth/roles/acl); TALARIA_ORG_NAME, if
-# set, is the expected organization name (a tenant-wide key has none). The real server must have an
+# set, is the expected organization name and TALARIA_ORG_ID the expected organization id (a tenant-wide key
+# gets the tenant's only organization). The real server must have an
 # `employee` role and no `ci` key; the run rewrites the employee ACL and clears it at the end.
 # Needs: go, pulumi, node+npm, curl, jq, network access for `npm install`.
 set -euo pipefail
@@ -93,6 +94,10 @@ step "pulumi up: create RoleAcl + ApiKey, read getScope"
 pl up --yes --skip-preview
 expect "created resources" "3 created" # stack + 2 talaria resources
 expect "getScope invoked through the provider" "${ORG_EXPECT:-tenantName}"
+if [[ -n "${TALARIA_ORG_ID:-}" ]]; then
+  [[ $(pulumi stack output organizationId) == "$TALARIA_ORG_ID" ]] || die "getScope organizationId should be $TALARIA_ORG_ID"
+  ok "getScope returns the expected organization id"
+fi
 [[ $(fake_state auth.role_acl employee | jq -c .features) == "[\"$F1\"]" ]] || die "server did not receive the ACL"
 ok "ACL reached the server"
 KEY_ID_1=$(pulumi stack output keyId)

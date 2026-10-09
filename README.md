@@ -75,9 +75,11 @@ it cannot read back (e.g. a secret only shown at creation), in which case the pr
   applied by `Check` for everything. Supported JSON Schema: string/number/integer/boolean, string `enum`
   (plain string), arrays, nullable, `additionalProperties` maps, nested objects (named types under `types`).
   Anything else fails schema generation with the kind and field named.
-- **ID** is the `keyField` value. Changing it, or any `replaceOnChanges` input, replaces the resource;
-  since the replacement has the same key, it is *delete before create*.
-- **Diff** compares new inputs with the previous inputs field by field (`null` ≡ absent; secret flag ignored).
+- **ID** is the `keyField` value. Changing it, or any `replaceOnChanges` input, replaces the resource. A
+  `replaceOnChanges` change keeps the key, so the replacement is *delete before create*; a changed key field alone
+  lets old and new coexist (create before delete).
+- **Diff** compares new inputs with the previous inputs field by field (`null` ≡ absent; secret flag ignored;
+  `format: date-time` strings compare as instants).
 - **Refresh/import** (`Read`) return the server state; the inputs they return contain only input fields. On refresh,
   optional inputs the program never set stay out of the inputs, so server-side defaults (e.g. an API key's
   `organizationId`) do not show up as drift. A freshly *imported* resource has every server value as input —
@@ -98,4 +100,4 @@ go vet ./... && go test ./...   # unit tests against an in-memory fake of the pr
 Set `TALARIA_URL` and `TALARIA_API_KEY` to run the same script against a real Talaria with the `iac` module instead of the
 fake (the key must be super-admin-capable: a tenant-wide key holding the `superadmin` and `iac` roles). The server needs an
 `employee` role; the script rewrites its ACL and clears it at the end. Optional `TALARIA_ADMIN_EMAIL` / `TALARIA_ADMIN_PASSWORD`
-make the drift step go through Talaria's own `PUT /api/auth/roles/acl`; `TALARIA_ORG_NAME` asserts the key's organization name.
+make the drift step go through Talaria's own `PUT /api/auth/roles/acl`; `TALARIA_ORG_NAME` / `TALARIA_ORG_ID` assert the organization `getScope` returns.

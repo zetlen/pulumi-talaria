@@ -154,8 +154,10 @@ func (s *state) check(_ context.Context, req p.CheckRequest) (p.CheckResponse, e
 }
 
 // differs reports whether two input values differ. Null and absent are the same; secrets
-// are compared by value; an unknown new value always differs.
-func differs(old, new property.Value) (bool, error) {
+// are compared by value; an unknown new value always differs. date-time strings (the field's
+// schema is `string`/`date-time`) are equal when they are the same instant, since the server
+// may answer in another offset or precision.
+func differs(schema map[string]any, old, new property.Value) (bool, error) {
 	if new.HasComputed() {
 		return true, nil
 	}
@@ -166,6 +168,20 @@ func differs(old, new property.Value) (bool, error) {
 	b, err := toJSON(new)
 	if err != nil {
 		return false, err
+	}
+	if inner, ok := nullable(schema); ok {
+		schema = inner
+	}
+	if schema["type"] == "string" && schema["format"] == "date-time" {
+		as, aok := a.(string)
+		bs, bok := b.(string)
+		if aok && bok {
+			ta, errA := time.Parse(time.RFC3339Nano, as)
+			tb, errB := time.Parse(time.RFC3339Nano, bs)
+			if errA == nil && errB == nil {
+				return !ta.Equal(tb), nil
+			}
+		}
 	}
 	return !reflect.DeepEqual(a, b), nil
 }
@@ -180,6 +196,7 @@ func (s *state) diff(_ context.Context, req p.DiffRequest) (p.DiffResponse, erro
 		old = pick(renameKeys(req.State, k.protocolName), properties(k.Inputs))
 	}
 	resp := p.DiffResponse{DetailedDiff: map[string]p.PropertyDiff{}}
+	schemas := properties(k.Inputs)
 	names := map[string]bool{}
 	for n := range old.All {
 		names[n] = true
@@ -189,7 +206,7 @@ func (s *state) diff(_ context.Context, req p.DiffRequest) (p.DiffResponse, erro
 	}
 	for _, name := range sortedKeys(names) {
 		o, n := old.Get(name), inputs.Get(name)
-		changed, err := differs(o, n)
+		changed, err := differs(schemas[name], o, n)
 		if err != nil {
 			return resp, fmt.Errorf("%s: %w", name, err)
 		}
@@ -205,7 +222,11 @@ func (s *state) diff(_ context.Context, req p.DiffRequest) (p.DiffResponse, erro
 		}
 		if k.isReplace(name) {
 			kind += "&replace"
-			resp.DeleteBeforeReplace = true // same key before and after: the new one cannot coexist
+			// Only a replaceOnChanges field keeps the key: the new resource would collide with the old
+			// one, so it must go first. A changed key field lets both coexist (create-before-delete).
+			if name != k.KeyField {
+				resp.DeleteBeforeReplace = true
+			}
 		}
 		resp.DetailedDiff[k.exposed(name)] = p.PropertyDiff{Kind: kind, InputDiff: true}
 	}

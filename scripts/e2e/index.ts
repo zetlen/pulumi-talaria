@@ -21,4 +21,5 @@ export const keyId = key.apiKeyId;
 export const keyPrefix = key.keyPrefix;
 export const secret = key.secret; // must stay secret
 export const organizationName = scope.organizationName;
+export const organizationId = scope.organizationId;
 export const tenantName = scope.tenantName;
