@@ -438,3 +438,39 @@ func TestInvoke(t *testing.T) {
 	_, err = e.prov.Invoke(ctx, p.InvokeRequest{Token: "talaria:directory:getNothing"})
 	assert.ErrorContains(t, err, "unknown token")
 }
+
+// A kind whose array items carry defaults, as workflow steps/transitions do: the server (zod)
+// fills them in for every item, so Check must too, or a read-back differs from the program.
+func TestCheckAppliesDefaultsInsideArrayItems(t *testing.T) {
+	raw := []byte(`{"protocol":1,"kinds":[{"name":"mod.thing","mode":"resource","keyField":"name",
+		"inputs":{"type":"object","required":["name"],"properties":{"name":{"type":"string"},
+			"rules":{"type":"array","items":{"type":"object","required":["id"],"properties":{
+				"id":{"type":"string"},"retry":{"type":"boolean","default":false}}}}}},
+		"outputs":{"type":"object","properties":{}}}]}`)
+	prov := provider.New(version)
+	_, err := prov.Parameterize(ctx, p.ParameterizeRequest{Value: &p.ParameterizeRequestValue{Name: "talaria", Version: version, Value: raw}})
+	require.NoError(t, err)
+	const tok = "talaria:mod:Thing"
+
+	item := func(fields map[string]property.Value) property.Value { return property.New(property.NewMap(fields)) }
+	rules := func(items ...property.Value) property.Value { return property.New(property.NewArray(items)) }
+	program := property.NewMap(map[string]property.Value{
+		"name":  property.New("t"),
+		"rules": rules(item(map[string]property.Value{"id": property.New("a")})),
+	})
+	checked, err := prov.Check(ctx, p.CheckRequest{Urn: urn(tok), Inputs: program})
+	require.NoError(t, err)
+	require.Empty(t, checked.Failures)
+	got := checked.Inputs.Get("rules").AsArray().Get(0).AsMap()
+	assert.Equal(t, false, got.Get("retry").AsBool(), "default applied inside the array item")
+	assert.Equal(t, "a", got.Get("id").AsString())
+
+	// What a server read-back looks like: the same item with the default filled in. No diff.
+	readBack := property.NewMap(map[string]property.Value{
+		"name":  property.New("t"),
+		"rules": rules(item(map[string]property.Value{"id": property.New("a"), "retry": property.New(false)})),
+	})
+	d, err := prov.Diff(ctx, p.DiffRequest{ID: "t", Urn: urn(tok), OldInputs: readBack, Inputs: checked.Inputs})
+	require.NoError(t, err)
+	assert.False(t, d.HasChanges, "defaults in array items must not read as drift: %v", d.DetailedDiff)
+}

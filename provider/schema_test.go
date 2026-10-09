@@ -129,16 +129,41 @@ func TestSchemaTypeMapping(t *testing.T) {
 	bindOK(t, spec)
 }
 
+func TestSchemaAnyMapping(t *testing.T) {
+	spec := buildSchema(t, kindDoc(`
+		"raw":{},
+		"maybeRaw":{"anyOf":[{"type":"object","propertyNames":{"type":"string"},"additionalProperties":{}},{"type":"null"}]},
+		"listOfRaw":{"type":"array","items":{}},
+		"mapOfRaw":{"type":"object","propertyNames":{"type":"string"},"additionalProperties":{}},
+		"union":{"anyOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]},
+		"mixed":{"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":{}}`, ""))
+
+	in := spec.Resources["talaria:mod:Thing"].InputProperties
+	assert.Equal(t, "pulumi.json#/Any", in["raw"].Ref, "bare {} is untyped JSON")
+	assert.Equal(t, "object", in["maybeRaw"].Type, "nullable object with additionalProperties {} is an optional map")
+	assert.Equal(t, "pulumi.json#/Any", in["maybeRaw"].AdditionalProperties.Ref)
+	assert.Equal(t, "array", in["listOfRaw"].Type)
+	assert.Equal(t, "pulumi.json#/Any", in["listOfRaw"].Items.Ref)
+	assert.Equal(t, "object", in["mapOfRaw"].Type)
+	assert.Equal(t, "pulumi.json#/Any", in["mapOfRaw"].AdditionalProperties.Ref)
+	assert.Equal(t, "pulumi.json#/Any", in["union"].Ref, "non-nullable anyOf falls back to untyped JSON")
+
+	// An object that declares both fixed properties and a catch-all additionalProperties
+	// cannot be expressed as a Pulumi object type, so it also falls back to Any.
+	assert.Equal(t, "pulumi.json#/Any", in["mixed"].Ref)
+
+	bindOK(t, spec)
+}
+
 func TestSchemaRejectsUnsupported(t *testing.T) {
 	cases := map[string]string{
-		"oneOf":              `"x":{"oneOf":[{"type":"string"},{"type":"number"}]}`,
-		"$ref":               `"x":{"$ref":"#/$defs/a"}`,
-		"const":              `"x":{"type":"string","const":"a"}`,
-		"anyOf is only":      `"x":{"anyOf":[{"type":"string"},{"type":"number"}]}`,
-		"unsupported type":   `"x":{"type":"null"}`,
-		"non-string":         `"x":{"type":["string","number"]}`,
-		"missing":            `"x":{}`,
-		"enum is only":       `"x":{"type":"integer","enum":[1,2]}`,
+		"oneOf":            `"x":{"oneOf":[{"type":"string"},{"type":"number"}]}`,
+		"$ref":             `"x":{"$ref":"#/$defs/a"}`,
+		"const":            `"x":{"type":"string","const":"a"}`,
+		"unsupported type": `"x":{"type":"null"}`,
+		"non-string":       `"x":{"type":["string","number"]}`,
+		"enum is only":     `"x":{"type":"integer","enum":[1,2]}`,
+
 		"without an \"items": `"x":{"type":"array"}`,
 		"needs":              `"x":{"type":"object"}`,
 		"x.y":                `"x":{"type":"object","properties":{"y":{"allOf":[]}}}`,

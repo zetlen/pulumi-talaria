@@ -168,6 +168,18 @@ func (b *builder) property(k *Kind, node map[string]any, tokenBase, path string)
 	return spec, hasDefault, nil
 }
 
+// isAnySchema reports whether a JSON Schema node imposes no constraints beyond an
+// optional description, i.e. it should accept arbitrary JSON. This matches zod's
+// z.any() output ({}) and the inner alternative of nullable any schemas.
+func isAnySchema(node map[string]any) bool {
+	for k := range node {
+		if k != "description" {
+			return false
+		}
+	}
+	return true
+}
+
 func (b *builder) typeSpec(k *Kind, node map[string]any, tokenBase, path string) (schema.TypeSpec, error) {
 	for _, kw := range unsupported {
 		if _, ok := node[kw]; ok {
@@ -176,10 +188,15 @@ func (b *builder) typeSpec(k *Kind, node map[string]any, tokenBase, path string)
 	}
 	if _, ok := node["anyOf"]; ok {
 		inner, ok := nullable(node)
-		if !ok {
-			return schema.TypeSpec{}, b.errorf(path, "anyOf is only supported as [X, {\"type\":\"null\"}]")
+		if ok {
+			return b.typeSpec(k, inner, tokenBase, path)
 		}
-		return b.typeSpec(k, inner, tokenBase, path)
+		// Non-nullable anyOf (unions) cannot be expressed precisely; fall back to untyped JSON.
+		return schema.TypeSpec{Ref: "pulumi.json#/Any"}, nil
+	}
+	// A bare/empty schema (or one carrying only a description) accepts any JSON value.
+	if isAnySchema(node) {
+		return schema.TypeSpec{Ref: "pulumi.json#/Any"}, nil
 	}
 	t, isString := node["type"].(string)
 	if !isString {
@@ -203,10 +220,11 @@ func (b *builder) typeSpec(k *Kind, node map[string]any, tokenBase, path string)
 		return schema.TypeSpec{Type: "array", Items: &el}, nil
 	case "object":
 		props := properties(node)
-		ap, _ := node["additionalProperties"].(map[string]any)
+		ap, hasAP := node["additionalProperties"].(map[string]any)
 		switch {
-		case len(props) > 0 && len(ap) > 0:
-			return schema.TypeSpec{}, b.errorf(path, "object with both properties and additionalProperties")
+		case len(props) > 0 && hasAP:
+			// Pulumi object types cannot combine named properties with a catch-all map; fall back.
+			return schema.TypeSpec{Ref: "pulumi.json#/Any"}, nil
 		case len(props) > 0:
 			obj, err := b.objectAt(k, node, tokenBase, path)
 			if err != nil {
@@ -217,7 +235,7 @@ func (b *builder) typeSpec(k *Kind, node map[string]any, tokenBase, path string)
 				Description: desc, Type: "object", Properties: obj.props, Required: obj.required,
 			}}
 			return schema.TypeSpec{Ref: "#/types/" + tokenBase}, nil
-		case len(ap) > 0:
+		case hasAP:
 			el, err := b.typeSpec(k, ap, tokenBase+"Value", path+"{}")
 			if err != nil {
 				return schema.TypeSpec{}, err
