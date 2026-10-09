@@ -157,13 +157,12 @@ func TestSchemaAnyMapping(t *testing.T) {
 
 func TestSchemaRejectsUnsupported(t *testing.T) {
 	cases := map[string]string{
-		"oneOf":              `"x":{"oneOf":[{"type":"string"},{"type":"number"}]}`,
-		"$ref":               `"x":{"$ref":"#/$defs/a"}`,
-		"const":              `"x":{"type":"string","const":"a"}`,
-		"unsupported type":   `"x":{"type":"null"}`,
-		"non-string":         `"x":{"type":["string","number"]}`,
-		"enum is only":       `"x":{"type":"integer","enum":[1,2]}`,
-
+		"oneOf":            `"x":{"oneOf":[{"type":"string"},{"type":"number"}]}`,
+		"$ref":             `"x":{"$ref":"#/$defs/a"}`,
+		"const":            `"x":{"type":"string","const":"a"}`,
+		"unsupported type": `"x":{"type":"null"}`,
+		"non-string":       `"x":{"type":["string","number"]}`,
+		"enum is only":     `"x":{"type":"integer","enum":[1,2]}`,
 
 		"without an \"items": `"x":{"type":"array"}`,
 		"needs":              `"x":{"type":"object"}`,
