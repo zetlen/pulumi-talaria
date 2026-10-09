@@ -94,3 +94,8 @@ go vet ./... && go test ./...   # unit tests against an in-memory fake of the pr
 
 `scripts/e2e.sh` is the acceptance test: `package add`, `up`, no-op `preview`, in-place update, replace, drift via
 `refresh`, `import`, `destroy`. It needs `pulumi`, `node`/`npm`, `jq`, `curl` and network access for `npm install`.
+
+Set `TALARIA_URL` and `TALARIA_API_KEY` to run the same script against a real Talaria with the `iac` module instead of the
+fake (the key must be super-admin-capable: a tenant-wide key holding the `superadmin` and `iac` roles). The server needs an
+`employee` role; the script rewrites its ACL and clears it at the end. Optional `TALARIA_ADMIN_EMAIL` / `TALARIA_ADMIN_PASSWORD`
+make the drift step go through Talaria's own `PUT /api/auth/roles/acl`; `TALARIA_ORG_NAME` asserts the key's organization name.

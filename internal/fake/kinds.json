@@ -13,9 +13,9 @@
           "role": { "type": "string", "minLength": 1, "description": "Role name in the key's tenant." },
           "features": { "type": "array", "items": { "type": "string" } },
           "isSuperAdmin": { "default": false, "type": "boolean" },
-          "organizations": { "anyOf": [{ "type": "array", "items": { "type": "string", "format": "uuid" } }, { "type": "null" }], "description": "null = all organizations." }
+          "organizations": { "default": null, "anyOf": [{ "type": "array", "items": { "type": "string", "format": "uuid" } }, { "type": "null" }], "description": "null (the default) = all organizations." }
         },
-        "required": ["role", "features", "organizations"],
+        "required": ["role", "features"],
         "additionalProperties": false
       },
       "outputs": { "type": "object", "properties": {} },
