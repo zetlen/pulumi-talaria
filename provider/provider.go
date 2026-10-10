@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/blang/semver"
@@ -40,6 +42,7 @@ type state struct {
 	doc     *KindsDoc
 	byToken map[string]*Kind
 	client  *client
+	written sync.Map // kind name + "\x00" + key of objects this process PUT and has not deleted since
 }
 
 // parameterize captures the kinds document, from a path/URL (CLI) or the embedded
@@ -196,6 +199,7 @@ func (s *state) diff(_ context.Context, req p.DiffRequest) (p.DiffResponse, erro
 		old = pick(renameKeys(req.State, k.protocolName), properties(k.Inputs))
 	}
 	resp := p.DiffResponse{DetailedDiff: map[string]p.PropertyDiff{}}
+	keyChanged := false
 	schemas := properties(k.Inputs)
 	names := map[string]bool{}
 	for n := range old.All {
@@ -222,14 +226,15 @@ func (s *state) diff(_ context.Context, req p.DiffRequest) (p.DiffResponse, erro
 		}
 		if k.isReplace(name) {
 			kind += "&replace"
-			// Only a replaceOnChanges field keeps the key: the new resource would collide with the old
-			// one, so it must go first. A changed key field lets both coexist (create-before-delete).
-			if name != k.KeyField {
-				resp.DeleteBeforeReplace = true
-			}
+		}
+		if name == k.KeyField {
+			keyChanged = true
 		}
 		resp.DetailedDiff[k.exposed(name)] = p.PropertyDiff{Kind: kind, InputDiff: true}
 	}
+	// The kind's object is identified by its key. While the key is unchanged, a replacement would
+	// collide with the old object, so it must go first. A changed key lets both coexist.
+	resp.DeleteBeforeReplace = !keyChanged
 	resp.HasChanges = len(resp.DetailedDiff) > 0
 	return resp, nil
 }
@@ -259,6 +264,7 @@ func (s *state) putState(ctx context.Context, k *Kind, inputs, prev property.Map
 	if err != nil {
 		return property.Map{}, err
 	}
+	s.written.Store(k.Name+"\x00"+keyV.AsString(), struct{}{})
 	st := pick(inputs, properties(k.Inputs))
 	for n, v := range pick(prev, properties(k.Outputs)).All {
 		st = st.Set(n, v)
@@ -299,6 +305,12 @@ func (k *Kind) preview(inputs, prev property.Map) property.Map {
 	return k.markSecrets(st)
 }
 
+// hasSecretOutput reports whether the server generates a secret the program cannot supply.
+func (k *Kind) hasSecretOutput() bool {
+	out := properties(k.Outputs)
+	return slices.ContainsFunc(k.SecretFields, func(f string) bool { return out[f] != nil })
+}
+
 func (s *state) create(ctx context.Context, req p.CreateRequest) (p.CreateResponse, error) {
 	k, err := s.kind(req.Urn.Type().String(), modeResource)
 	if err != nil {
@@ -308,11 +320,24 @@ func (s *state) create(ctx context.Context, req p.CreateRequest) (p.CreateRespon
 	if req.DryRun {
 		return p.CreateResponse{Properties: renameKeys(k.preview(inputs, property.Map{}), k.exposed)}, nil
 	}
+	// The server never repeats an existing object's secret output. A create under an existing key
+	// (forced replace, or a stray object) could therefore only return state with the secret lost, so
+	// refuse before writing anything: the engine then keeps the old state and skips the old delete.
+	if key, ok := inputs.GetOk(k.KeyField); ok && key.IsString() && k.hasSecretOutput() {
+		existing, err := s.client.get(ctx, k.Name, key.AsString())
+		if err != nil {
+			return p.CreateResponse{}, err
+		}
+		if existing != nil {
+			return p.CreateResponse{}, fmt.Errorf("%s %q already exists, so its secret can't be read back. To rotate it, run pulumi destroy --target %s, then pulumi up. To adopt it, use pulumi import", k.Name, key.AsString(), req.Urn)
+		}
+	}
 	st, err := s.putState(ctx, k, inputs, property.Map{})
 	if err != nil {
 		return p.CreateResponse{}, err
 	}
-	return p.CreateResponse{ID: st.Get(k.KeyField).AsString(), Properties: renameKeys(st, k.exposed)}, nil
+	id := st.Get(k.KeyField).AsString()
+	return p.CreateResponse{ID: id, Properties: renameKeys(st, k.exposed)}, nil
 }
 
 func (s *state) update(ctx context.Context, req p.UpdateRequest) (p.UpdateResponse, error) {
@@ -332,6 +357,13 @@ func (s *state) delete(ctx context.Context, req p.DeleteRequest) error {
 	k, err := s.kind(req.Urn.Type().String(), modeResource)
 	if err != nil {
 		return err
+	}
+	// The engine ignores Diff's DeleteBeforeReplace for a forced replace (`--replace`) and for a
+	// rename without an alias: it creates the new resource first, under the same key, then deletes
+	// the old one. Deleting by key now would remove the object this run just wrote, so a delete of a
+	// key this process PUT (and has not deleted since) is a no-op.
+	if _, ok := s.written.LoadAndDelete(k.Name + "\x00" + req.ID); ok {
+		return nil
 	}
 	return s.client.delete(ctx, k.Name, req.ID)
 }

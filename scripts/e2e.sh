@@ -154,6 +154,32 @@ pl up --yes --skip-preview
 [[ $(fake_state auth.role_acl employee | jq -c .features) == "[\"$F1\",\"$F2\"]" ]] || die "up did not repair drift"
 ok "up repaired the drift"
 
+step "forced replace: pulumi up --replace <ApiKey> is refused and changes nothing"
+# The engine ignores Diff's deleteBeforeReplace for --replace: it creates first, under the same key.
+# The key's secret cannot be read back, so Create refuses; the engine keeps the old state and never
+# runs the old delete. To rotate a key: pulumi destroy --target <urn>, then pulumi up.
+SECRET_2=$(pulumi stack output --show-secrets secret)
+KEY_URN=$(pulumi stack export | jq -r '.deployment.resources[] | select(.type == "talaria:api_keys:ApiKey") | .urn')
+[[ "$KEY_URN" == urn:pulumi:* ]] || die "could not find the api key urn (got '$KEY_URN')"
+if OUT=$(pulumi --non-interactive --color never up --yes --skip-preview --replace "$KEY_URN" 2>&1); then
+  printf '%s\n' "$OUT"; die "forced replace of an api key must fail"
+fi
+printf '%s\n' "$OUT"
+expect "refusal explains how to rotate" "already exists, so its secret can't be read back"
+[[ $(fake_state api_keys.api_key ci | jq -r .id) == "$KEY_ID_2" ]] || die "api key missing on the server after the refused forced replace"
+[[ $(pulumi stack output --show-secrets secret) == "$SECRET_2" ]] || die "state secret changed by the refused forced replace"
+pl preview --expect-no-changes
+ok "key still on the server, state secret unchanged, preview clean"
+
+step "forced replace: pulumi up --replace <RoleAcl> re-applies the ACL"
+ACL_URN=$(pulumi stack export | jq -r '.deployment.resources[] | select(.type == "talaria:auth:RoleAcl") | .urn')
+[[ "$ACL_URN" == urn:pulumi:* ]] || die "could not find the ACL urn (got '$ACL_URN')"
+pl up --yes --skip-preview --replace "$ACL_URN"
+expect "ACL replaced" "1 replaced"
+[[ $(fake_state auth.role_acl employee | jq -c .features) == "[\"$F1\",\"$F2\"]" ]] || die "forced replace cleared the ACL on the server"
+pl preview --expect-no-changes
+ok "ACL re-applied, preview clean"
+
 step "import: drop the ACL from state, import it back from the server"
 URN=$(pulumi stack export | jq -r '.deployment.resources[] | select(.type == "talaria:auth:RoleAcl") | .urn')
 [[ "$URN" == urn:pulumi:* ]] || die "could not find the ACL urn (got '$URN')"
