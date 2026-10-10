@@ -48,9 +48,11 @@ Provider configuration (`pulumi config set talaria:url …`, or the environment)
 pulumi plugin install resource talaria <version> --server github://api.github.com/zetlen/pulumi-talaria
 ```
 
-Tagging `v<version>` runs `.github/workflows/release.yml`, which publishes
-`pulumi-resource-talaria-v<version>-{linux-amd64,darwin-arm64,darwin-amd64}.tar.gz` to the GitHub release
-(GoReleaser, version baked in with `-ldflags -X main.version`).
+Releases are cut by [release-please](.github/workflows/release-please.yml): merge its release PR and it
+tags `v<version>`, opens the GitHub release, and builds and attaches
+`pulumi-resource-talaria-v<version>-{linux-amd64,darwin-arm64,darwin-amd64}.tar.gz` to it
+(GoReleaser, version baked in with `-ldflags -X main.version`). Pushing a `v<version>` tag by hand does
+the same via `.github/workflows/release.yml`.
 
 ## The protocol (version 1)
 
