@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/zetlen/pulumi-talaria/compare/v0.1.2...v0.1.3) (2026-10-22)
+
+
+### Bug Fixes
+
+* build the provider for linux-arm64 ([#7](https://github.com/zetlen/pulumi-talaria/issues/7)) ([f580be1](https://github.com/zetlen/pulumi-talaria/commit/f580be1b07a40e5fb385e2dd1eba870db7125291))
+
 ## [0.1.2](https://github.com/zetlen/pulumi-talaria/compare/v0.1.1...v0.1.2) (2026-10-10)
 
 
