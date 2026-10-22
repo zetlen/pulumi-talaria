@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/zetlen/pulumi-talaria/compare/v0.1.3...v0.1.4) (2026-10-22)
+
+
+### Bug Fixes
+
+* require Go 1.27.3 ([#9](https://github.com/zetlen/pulumi-talaria/issues/9)) ([54402cb](https://github.com/zetlen/pulumi-talaria/commit/54402cb8adc578ffd11ec799874e3d0893e25ccf))
+
 ## [0.1.3](https://github.com/zetlen/pulumi-talaria/compare/v0.1.2...v0.1.3) (2026-10-22)
 
 
